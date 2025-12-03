@@ -11,8 +11,10 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- 3. 載入 Babel (用於在瀏覽器中編譯 JSX) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- 4. 載入 Recharts 圖表函式庫 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.0/recharts.min.js"></script>
+    <!-- 4. [已修復] 載入 Prop-Types，這是 Recharts 的依賴項，修復 oneOfType 錯誤 -->
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.js"></script>
+    <!-- 5. 載入 Recharts 圖表函式庫 (使用 jsDelivr CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.0/umd/Recharts.min.js"></script>
     
     <style>
         /* 確保頁面平滑滾動，並使用 Inter 字體 (Tailwind 默認) */
@@ -25,29 +27,43 @@
     <script type="text/babel">
         // 在此環境下，Recharts 組件會被掛載到 window.Recharts，需要手動解構。
         const { 
-            useState, useMemo, useCallback 
+            useState, useMemo, useCallback, useEffect 
         } = React;
 
+        const RechartsComponents = window.Recharts || {};
         const { 
             LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, 
             ResponsiveContainer, ReferenceDot, Label 
-        } = window.Recharts || {}; 
+        } = RechartsComponents; 
 
         // --- 核心計算邏輯 ---
         const calculateMoment = (params) => {
             const PI = Math.PI;
-            const { E, d, Da, Na } = params;
+            // 使用 Math.max(0.001, ...) 確保參數不會為零或負值，避免除以零或無意義的計算
+            const E = Math.max(0.001, params.E);
+            const d = Math.max(0.001, params.d);
+            const Da = Math.max(0.001, params.Da);
+            const Na = Math.max(0.001, params.Na);
 
-            if (d <= 0 || Da <= 0 || Na <= 0 || E <= 0) return 0;
-            
             const numerator = PI * E * Math.pow(d, 4);
             const denominator = 64 * 180 * Na * Da;
             
-            return numerator / denominator;
+            // 檢查結果是否為 NaN，如果是則返回 0
+            const result = numerator / denominator;
+            return isNaN(result) ? 0 : result;
         };
 
         // --- 趨勢圖元件 ---
-        const TrendChart = ({ params, currentResult }) => {
+        const TrendChart = ({ params, currentResult, isRechartsLoaded }) => {
+          
+          if (!isRechartsLoaded || !LineChart) {
+              return (
+                  <div className="p-6 text-center bg-red-900/20 border border-red-500/50 rounded-lg shadow-inner">
+                      <p className="text-lg font-bold text-red-300">圖表載入失敗 (Recharts 錯誤)</p>
+                      <p className="sm:text-sm text-gray-400 mt-2">請檢查網路連線，確保 Recharts 函式庫已成功載入。</p>
+                  </div>
+              );
+          }
           
           const data = useMemo(() => {
             const points = [];
@@ -69,7 +85,9 @@
                 });
             }
 
-            if (!points.some(p => p.d === parseFloat(centerD.toFixed(3)))) {
+            // 確保中心點數據包含在內
+            const centerPointExists = points.some(p => Math.abs(p.d - centerD) < 0.001);
+            if (!centerPointExists) {
                 points.push({
                     d: parseFloat(centerD.toFixed(3)),
                     M: parseFloat(currentResult.toFixed(4)),
@@ -81,20 +99,29 @@
             return points;
           }, [params, currentResult]);
 
-          const yDomain = useMemo(() => {
-            if (data.length === 0) return [0, 1];
-            const allM = data.map(p => p.M);
-            const minM = Math.min(...allM);
-            const maxM = Math.max(...allM);
-            const padding = (maxM - minM) * 0.1;
-            return [Math.max(0, minM - padding), maxM + padding];
-          }, [data]);
-
-          if (!LineChart) {
-              return <div className="p-4 text-center text-red-500">圖表載入失敗，請檢查網路連接。</div>;
+          if (data.length === 0 || currentResult <= 0) {
+              return (
+                  <div className="p-6 text-center bg-yellow-900/20 border border-yellow-500/50 rounded-lg shadow-inner">
+                      <p className="text-lg font-bold text-yellow-300">無法繪製趨勢圖</p>
+                      <p className="sm:text-sm text-gray-400 mt-2">請確保所有輸入參數 (E, d, Da, Na) 皆為正數。</p>
+                  </div>
+              );
           }
 
 
+          const yDomain = useMemo(() => {
+            const allM = data.map(p => p.M).filter(m => !isNaN(m));
+            if (allM.length === 0) return [0, 1];
+            
+            const minM = Math.min(...allM);
+            const maxM = Math.max(...allM);
+            // 避免 min/max 相同時 padding 為零
+            const range = maxM === minM ? maxM * 0.5 : (maxM - minM);
+            const padding = range * 0.1;
+            
+            return [Math.max(0, minM - padding), maxM + padding];
+          }, [data]);
+          
           return (
             <div className="w-full h-full text-xs p-4 rounded-lg bg-gray-900 border border-gray-700 shadow-xl">
               <h3 className="text-sm font-semibold text-teal-400 mb-4 text-center">線徑 d 對力矩 M 趨勢分析 (±50%)</h3>
@@ -173,16 +200,32 @@
                 Da: 4.8,
                 Na: 10,
             });
+            const [isRechartsLoaded, setIsRechartsLoaded] = useState(false);
+
+            useEffect(() => {
+                // 檢查 Recharts 是否成功加載到 window 物件
+                if (window.Recharts) {
+                    setIsRechartsLoaded(true);
+                } else {
+                    // 如果載入失敗，可以在控制台輸出錯誤
+                    console.error("Recharts library failed to load. Check network connection.");
+                }
+            }, []);
             
             const currentResult = useMemo(() => calculateMoment(params), [params]);
 
             const handleChange = useCallback((e) => {
                 const { id, value } = e.target;
-                const numValue = parseFloat(value);
+                let numValue = parseFloat(value);
                 
+                // 處理無效輸入，如果輸入無效或小於等於零，則設為最小值 0.01 或 1
+                if (isNaN(numValue) || numValue <= 0) {
+                     numValue = (id === 'E' || id === 'Na') ? 1 : 0.01;
+                }
+
                 setParams(prev => ({
                     ...prev,
-                    [id]: isNaN(numValue) ? 0 : numValue
+                    [id]: numValue
                 }));
             }, []);
 
@@ -242,7 +285,7 @@
 
                         {/* 圖表區塊 */}
                         <div className="mt-8 pt-4 border-t border-gray-700">
-                            <TrendChart params={params} currentResult={currentResult} />
+                            <TrendChart params={params} currentResult={currentResult} isRechartsLoaded={isRechartsLoaded} />
                         </div>
                     </div>
                 </div>
