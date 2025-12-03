@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C專案 - 扭簧力矩趨勢分析器</title>
+    <!-- 1. 載入 Tailwind CSS (用於快速樣式) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. 載入 React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- 3. 載入 Babel (用於在瀏覽器中編譯 JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 4. 載入 Recharts 圖表函式庫 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.0/recharts.min.js"></script>
+    
+    <style>
+        /* 確保頁面平滑滾動，並使用 Inter 字體 (Tailwind 默認) */
+    </style>
+</head>
+<body>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // 在此環境下，Recharts 組件會被掛載到 window.Recharts，需要手動解構。
+        const { 
+            useState, useMemo, useCallback 
+        } = React;
+
+        const { 
+            LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, 
+            ResponsiveContainer, ReferenceDot, Label 
+        } = window.Recharts || {}; 
+
+        // --- 核心計算邏輯 ---
+        const calculateMoment = (params) => {
+            const PI = Math.PI;
+            const { E, d, Da, Na } = params;
+
+            if (d <= 0 || Da <= 0 || Na <= 0 || E <= 0) return 0;
+            
+            const numerator = PI * E * Math.pow(d, 4);
+            const denominator = 64 * 180 * Na * Da;
+            
+            return numerator / denominator;
+        };
+
+        // --- 趨勢圖元件 ---
+        const TrendChart = ({ params, currentResult }) => {
+          
+          const data = useMemo(() => {
+            const points = [];
+            const steps = 15; 
+            const range = 0.5; 
+            const centerD = params.d;
+
+            if (centerD <= 0) return [];
+
+            for (let i = -steps; i <= steps; i++) {
+                const factor = 1 + (i / steps) * range; 
+                const d_var = Math.max(0.01, centerD * factor);
+                
+                const M_val = calculateMoment({ ...params, d: d_var });
+                
+                points.push({
+                    d: parseFloat(d_var.toFixed(3)),
+                    M: parseFloat(M_val.toFixed(4)),
+                });
+            }
+
+            if (!points.some(p => p.d === parseFloat(centerD.toFixed(3)))) {
+                points.push({
+                    d: parseFloat(centerD.toFixed(3)),
+                    M: parseFloat(currentResult.toFixed(4)),
+                });
+            }
+
+            points.sort((a, b) => a.d - b.d);
+            
+            return points;
+          }, [params, currentResult]);
+
+          const yDomain = useMemo(() => {
+            if (data.length === 0) return [0, 1];
+            const allM = data.map(p => p.M);
+            const minM = Math.min(...allM);
+            const maxM = Math.max(...allM);
+            const padding = (maxM - minM) * 0.1;
+            return [Math.max(0, minM - padding), maxM + padding];
+          }, [data]);
+
+          if (!LineChart) {
+              return <div className="p-4 text-center text-red-500">圖表載入失敗，請檢查網路連接。</div>;
+          }
+
+
+          return (
+            <div className="w-full h-full text-xs p-4 rounded-lg bg-gray-900 border border-gray-700 shadow-xl">
+              <h3 className="text-sm font-semibold text-teal-400 mb-4 text-center">線徑 d 對力矩 M 趨勢分析 (±50%)</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart
+                  data={data}
+                  margin={{ top: 10, right: 30, left: 10, bottom: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis 
+                    dataKey="d" 
+                    stroke="#64748b" 
+                    tick={{ fill: '#94a3b8', fontSize: 10 }}
+                    tickFormatter={(value) => value.toFixed(2)}
+                    domain={['auto', 'auto']}
+                  >
+                    <Label 
+                        value="d (線徑, mm)" 
+                        position="bottom" 
+                        offset={0} 
+                        fill="#475569" 
+                        style={{ fontSize: '10px' }}
+                    />
+                  </XAxis>
+                  <YAxis 
+                    stroke="#64748b" 
+                    tick={{ fill: '#94a3b8', fontSize: 10 }}
+                    tickFormatter={(value) => value.toFixed(4)}
+                    domain={yDomain}
+                    width={70}
+                  >
+                    <Label 
+                        value="M (力矩, kg·mm)" 
+                        angle={-90} 
+                        position="insideLeft" 
+                        offset={-10} 
+                        fill="#475569" 
+                        style={{ textAnchor: 'middle', fontSize: '10px' }}
+                    />
+                  </YAxis>
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#1e293b', borderColor: '#0891b2', color: '#ecfeff', borderRadius: '4px', padding: '5px' }}
+                    itemStyle={{ color: '#22d3ee', fontSize: '12px' }}
+                    formatter={(value) => [`M: ${value.toFixed(5)} kg·mm`, '']}
+                    labelFormatter={(label) => `d (線徑): ${label.toFixed(3)} mm`}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="M" 
+                    stroke="#0891b2" 
+                    strokeWidth={2} 
+                    dot={false}
+                    activeDot={false}
+                  />
+                  {/* Highlight the current value */}
+                  <ReferenceDot 
+                    x={params.d} 
+                    y={currentResult} 
+                    r={6} 
+                    fill="#10b981" 
+                    stroke="#fff" 
+                    strokeWidth={2}
+                    is={'current'}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        };
+
+        // --- 主要應用程式元件 (App) ---
+        const App = () => {
+            const [params, setParams] = useState({
+                E: 21000,
+                d: 1.0,
+                Da: 4.8,
+                Na: 10,
+            });
+            
+            const currentResult = useMemo(() => calculateMoment(params), [params]);
+
+            const handleChange = useCallback((e) => {
+                const { id, value } = e.target;
+                const numValue = parseFloat(value);
+                
+                setParams(prev => ({
+                    ...prev,
+                    [id]: isNaN(numValue) ? 0 : numValue
+                }));
+            }, []);
+
+            const neonClass = "text-teal-300 focus:ring-teal-400 focus:border-teal-400 bg-gray-800 border-gray-700 placeholder-gray-500 text-white rounded-md";
+
+            return (
+                <div className="min-h-screen bg-gray-900 text-gray-100 p-4 sm:p-8 flex justify-center items-start pt-10 font-sans">
+                    <div className="w-full max-w-4xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-10 border-t-4 border-teal-500/80 space-y-8">
+                        
+                        {/* 標題 */}
+                        <h1 className="text-3xl font-extrabold text-center text-teal-400 tracking-wider border-b-2 border-gray-700 pb-3 mb-6">
+                            扭簧力矩 M 趨勢分析器 (C 專案)
+                        </h1>
+
+                        {/* 輸入區塊 */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {Object.entries(params).map(([key, value]) => {
+                                let label = key;
+                                let step = 1;
+                                let units = '';
+
+                                switch (key) {
+                                    case 'E': label = 'E (線材剛性)'; units = 'kg/mm²'; step = 1000; break;
+                                    case 'd': label = 'd (材料線徑)'; units = 'mm'; step = 0.01; break;
+                                    case 'Da': label = 'Da (中心徑)'; units = 'mm'; step = 0.1; break;
+                                    case 'Na': label = 'Na (有效圈數)'; units = ''; step = 1; break;
+                                    default: break;
+                                }
+
+                                return (
+                                    <div key={key} className="flex items-center space-x-4">
+                                        <label htmlFor={key} className="flex-none w-2/5 text-sm font-medium text-gray-400">
+                                            {label} ({units}):
+                                        </label>
+                                        <input
+                                            type="number"
+                                            id={key}
+                                            value={value}
+                                            onChange={handleChange}
+                                            step={step}
+                                            min={0.01}
+                                            className={`flex-grow p-2.5 text-right text-base ${neonClass}`}
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* 結果顯示 */}
+                        <div className="bg-blue-900/20 border border-blue-600/50 p-4 rounded-lg text-center shadow-inner">
+                            <p className="text-sm text-gray-300 mb-1">當前參數計算結果 (M):</p>
+                            <p className="text-4xl font-mono font-bold text-teal-300">
+                                {currentResult.toFixed(5)} 
+                                <span className="text-xl font-normal text-teal-400/80 ml-2">kg·mm</span>
+                            </p>
+                        </div>
+
+                        {/* 圖表區塊 */}
+                        <div className="mt-8 pt-4 border-t border-gray-700">
+                            <TrendChart params={params} currentResult={currentResult} />
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 渲染應用程式
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+
+</body>
+</html>
